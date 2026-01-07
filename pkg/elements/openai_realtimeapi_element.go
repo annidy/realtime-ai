@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	openairt "github.com/WqyJh/go-openai-realtime"
+	openairt "github.com/WqyJh/go-openai-realtime/v2"
 	"github.com/realtime-ai/realtime-ai/pkg/audio"
 	"github.com/realtime-ai/realtime-ai/pkg/pipeline"
 	"github.com/sashabaranov/go-openai"
@@ -19,8 +19,14 @@ import (
 // Make sure OpenAIRealtimeAPIElement implements pipeline.Element
 var _ pipeline.Element = (*OpenAIRealtimeAPIElement)(nil)
 
+type OpenAIRealtimeAPIConfig struct {
+	Model string
+}
+
 type OpenAIRealtimeAPIElement struct {
 	*pipeline.BaseElement
+
+	model string
 
 	conn      *openairt.Conn
 	sessionID string
@@ -30,9 +36,13 @@ type OpenAIRealtimeAPIElement struct {
 	wg     sync.WaitGroup
 }
 
-func NewOpenAIRealtimeAPIElement() *OpenAIRealtimeAPIElement {
+func NewOpenAIRealtimeAPIElement(config OpenAIRealtimeAPIConfig) *OpenAIRealtimeAPIElement {
 	var dumper *audio.Dumper
 	var err error
+
+	if config.Model == "" {
+		config.Model = "gpt-realtime"
+	}
 
 	// 如果环境变量设置了，就创建dumper
 	if os.Getenv("DUMP_OPENAI_AUDIO") == "true" {
@@ -47,6 +57,7 @@ func NewOpenAIRealtimeAPIElement() *OpenAIRealtimeAPIElement {
 	return &OpenAIRealtimeAPIElement{
 		BaseElement: pipeline.NewBaseElement("openai-realtime-element", 100),
 		dumper:      dumper,
+		model:       config.Model,
 	}
 }
 
@@ -59,18 +70,20 @@ func (e *OpenAIRealtimeAPIElement) Start(ctx context.Context) error {
 	// if baseURL != "" {
 	// 	client.BaseURL = baseURL
 	// }
-	conn, err := client.Connect(context.Background())
+	conn, err := client.Connect(context.Background(), openairt.WithModel(e.model))
 	if err != nil {
+		log.Printf("Failed to connect to OpenAI: %v", err)
 		return err
 	}
 	e.conn = conn
+	log.Println("openai connect success")
 
 	responseDeltaHandler := func(ctx context.Context, event openairt.ServerEvent) {
 		switch event.ServerEventType() {
-		case openairt.ServerEventTypeResponseAudioTranscriptDelta:
+		case openairt.ServerEventTypeResponseOutputAudioTranscriptDelta:
 			// ignore
-		case openairt.ServerEventTypeResponseAudioTranscriptDone:
-			fmt.Printf("[response] %s\n", event.(openairt.ResponseAudioTranscriptDoneEvent).Transcript)
+		case openairt.ServerEventTypeResponseOutputAudioTranscriptDone:
+			fmt.Printf("[response] %s\n", event.(openairt.ResponseOutputAudioTranscriptDoneEvent).Transcript)
 		}
 	}
 
@@ -103,8 +116,8 @@ func (e *OpenAIRealtimeAPIElement) Start(ctx context.Context) error {
 
 	audioResponseHandler := func(ctx context.Context, event openairt.ServerEvent) {
 		switch event.ServerEventType() {
-		case openairt.ServerEventTypeResponseAudioDelta:
-			msg := event.(openairt.ResponseAudioDeltaEvent)
+		case openairt.ServerEventTypeResponseOutputAudioDelta:
+			msg := event.(openairt.ResponseOutputAudioDeltaEvent)
 			// log.Printf("audioResponseHandler: %v", delta)
 			data, err := base64.StdEncoding.DecodeString(msg.Delta)
 			if err != nil {
@@ -119,7 +132,7 @@ func (e *OpenAIRealtimeAPIElement) Start(ctx context.Context) error {
 				}
 			}
 
-		case openairt.ServerEventTypeResponseAudioDone:
+		case openairt.ServerEventTypeResponseOutputAudioDone:
 
 			data := audiobuffer[:]
 			audiobuffer = make([]byte, 0)
@@ -155,23 +168,41 @@ func (e *OpenAIRealtimeAPIElement) Start(ctx context.Context) error {
 	connHandler.Start()
 
 	conn.SendMessage(ctx, openairt.SessionUpdateEvent{
-		Session: openairt.ClientSession{
-			Modalities:        []openairt.Modality{openairt.ModalityText, openairt.ModalityAudio},
-			Voice:             openairt.VoiceShimmer,
-			OutputAudioFormat: openairt.AudioFormatPcm16,
-			InputAudioTranscription: &openairt.InputAudioTranscription{
-				Model: openai.Whisper1,
-			},
-			TurnDetection: &openairt.ClientTurnDetection{
-				Type: openairt.ClientTurnDetectionTypeServerVad,
-				TurnDetectionParams: openairt.TurnDetectionParams{
-					Threshold:         0.7,
-					SilenceDurationMs: 800,
+		Session: openairt.SessionUnion{
+			Realtime: &openairt.RealtimeSession{
+				Model:            e.model,
+				OutputModalities: []openairt.Modality{openairt.ModalityText, openairt.ModalityAudio},
+				Audio: &openairt.RealtimeSessionAudio{
+					Input: &openairt.SessionAudioInput{
+						Format: &openairt.AudioFormatUnion{
+							PCM: &openairt.AudioFormatPCM{
+								Rate: 24000,
+							},
+						},
+						Transcription: &openairt.AudioTranscription{
+							Model: openai.Whisper1,
+						},
+						TurnDetection: &openairt.TurnDetectionUnion{
+							ServerVad: &openairt.ServerVad{
+								Threshold:         0.7,
+								SilenceDurationMs: 800,
+							},
+						},
+					},
+					Output: &openairt.SessionAudioOutput{
+						Format: &openairt.AudioFormatUnion{
+							PCM: &openairt.AudioFormatPCM{
+								Rate: 24000,
+							},
+						},
+						Voice: openairt.VoiceShimmer,
+					},
 				},
+				MaxOutputTokens: 4000,
 			},
-			MaxOutputTokens: 4000,
 		},
 	})
+	log.Println("send update event")
 
 	e.wg.Add(1)
 	go func() {
@@ -188,6 +219,8 @@ func (e *OpenAIRealtimeAPIElement) Start(ctx context.Context) error {
 					if msg.AudioData.MediaType != pipeline.AudioMediaTypeRaw {
 						continue
 					}
+
+					log.Printf("pipeline.MsgTypeAudio received, data length: %d", len(msg.AudioData.Data))
 
 					// 将 PCM data 发送给 AI
 					if len(msg.AudioData.Data) == 0 {
