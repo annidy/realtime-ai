@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	msginterfaces "github.com/deepgram/deepgram-go-sdk/v3/pkg/api/listen/v1/websocket/interfaces"
 	"github.com/deepgram/deepgram-go-sdk/v3/pkg/client/interfaces"
@@ -102,6 +103,8 @@ type deepgramStreamingRecognizer struct {
 	sendChan    chan []byte
 	commitChan  chan struct{}
 	mu          sync.Mutex
+	ctx         context.Context
+	cancel      context.CancelFunc
 	closed      atomic.Bool
 
 	dgClient *listenv1ws.WSChannel
@@ -167,8 +170,8 @@ func (dch *deepgramStreamingRecognizer) Run() error {
 	go func() {
 		defer wgReceivers.Done()
 
-		for _ = range dch.openChan {
-			fmt.Printf("\n\n[OpenResponse]\n\n")
+		for range dch.openChan {
+			fmt.Printf("\n[OpenResponse]\n")
 		}
 	}()
 
@@ -189,6 +192,21 @@ func (dch *deepgramStreamingRecognizer) Run() error {
 				logger.Printf("\n[MessageResponse] (Final) %s\n", sentence)
 			} else {
 				logger.Printf("\n[MessageResponse] (Interim) %s\n", sentence)
+			}
+
+			result := &RecognitionResult{
+				Text:       sentence,
+				IsFinal:    mr.IsFinal,
+				Confidence: float32(mr.Channel.Alternatives[0].Confidence),
+				Timestamp:  time.Now(),
+				Metadata:   map[string]interface{}{},
+			}
+
+			select {
+			case dch.resultsChan <- result:
+			case <-dch.ctx.Done():
+			default:
+				logger.Printf("Results channel full, dropping message")
 			}
 		}
 	}()
@@ -267,6 +285,8 @@ func (dch *deepgramStreamingRecognizer) Run() error {
 }
 
 func (r *deepgramStreamingRecognizer) connect(ctx context.Context) error {
+	r.ctx, r.cancel = context.WithCancel(ctx)
+
 	logger.Println("DEEPGRAM - connecting")
 	// Initialize Deepgram client
 	// client options
@@ -338,6 +358,10 @@ func (r *deepgramStreamingRecognizer) Close() error {
 		return nil // Already closed
 	}
 	logger.Println("closing recognizer")
+
+	if r.cancel != nil {
+		r.cancel()
+	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
