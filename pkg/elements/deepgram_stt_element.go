@@ -395,11 +395,9 @@ func (e *DeepgramSTTElement) handleResults(ctx context.Context) {
 			}
 
 			// Determine text type
-			textType := "text/partial"
-			eventType := pipeline.EventPartialResult
+			textType := pipeline.TextDataPartialType
 			if result.IsFinal {
-				textType = "text/final"
-				eventType = pipeline.EventFinalResult
+				textType = pipeline.TextDataFinalType
 			}
 
 			logger.Printf("Recognition result (%s): %s", textType, result.Text)
@@ -423,11 +421,21 @@ func (e *DeepgramSTTElement) handleResults(ctx context.Context) {
 			}
 
 			// Publish event to bus
-			if e.BaseElement.Bus() != nil {
-				e.BaseElement.Bus().Publish(pipeline.Event{
-					Type:      eventType,
+			if result.IsFinal {
+				e.Bus().Publish(pipeline.Event{
+					Type:      pipeline.EventPartialResult,
 					Timestamp: result.Timestamp,
-					Payload:   result.Text,
+					Payload: pipeline.FinalResultPayload{
+						Transcript: result.Text,
+					},
+				})
+			} else {
+				e.Bus().Publish(pipeline.Event{
+					Type:      pipeline.EventFinalResult,
+					Timestamp: result.Timestamp,
+					Payload: pipeline.PartialResultPayload{
+						Delta: result.Text,
+					},
 				})
 			}
 		}

@@ -68,6 +68,16 @@ type TextDeltaPayload struct {
 	IsFinal    bool
 }
 
+type PartialResultPayload struct {
+	ResponseID string
+	Delta      string
+}
+
+type FinalResultPayload struct {
+	ResponseID string
+	Transcript string
+}
+
 // VADPayload is the payload for VAD events
 type VADPayload struct {
 	AudioMs      int     // Audio position in milliseconds

@@ -11,34 +11,35 @@ import (
 type ServerEventType string
 
 const (
-	ServerEventTypeError                                        ServerEventType = "error"
-	ServerEventTypeSessionCreated                               ServerEventType = "session.created"
-	ServerEventTypeSessionUpdated                               ServerEventType = "session.updated"
-	ServerEventTypeInputAudioBufferCommitted                    ServerEventType = "input_audio_buffer.committed"
-	ServerEventTypeInputAudioBufferCleared                      ServerEventType = "input_audio_buffer.cleared"
-	ServerEventTypeInputAudioBufferSpeechStarted                ServerEventType = "input_audio_buffer.speech_started"
-	ServerEventTypeInputAudioBufferSpeechStopped                ServerEventType = "input_audio_buffer.speech_stopped"
-	ServerEventTypeConversationCreated                          ServerEventType = "conversation.created"
-	ServerEventTypeConversationItemCreated                      ServerEventType = "conversation.item.created"
+	ServerEventTypeError                                            ServerEventType = "error"
+	ServerEventTypeSessionCreated                                   ServerEventType = "session.created"
+	ServerEventTypeSessionUpdated                                   ServerEventType = "session.updated"
+	ServerEventTypeInputAudioBufferCommitted                        ServerEventType = "input_audio_buffer.committed"
+	ServerEventTypeInputAudioBufferCleared                          ServerEventType = "input_audio_buffer.cleared"
+	ServerEventTypeInputAudioBufferSpeechStarted                    ServerEventType = "input_audio_buffer.speech_started"
+	ServerEventTypeInputAudioBufferSpeechStopped                    ServerEventType = "input_audio_buffer.speech_stopped"
+	ServerEventTypeConversationCreated                              ServerEventType = "conversation.created"
+	ServerEventTypeConversationItemCreated                          ServerEventType = "conversation.item.created"
 	ServerEventTypeConversationItemInputAudioTranscriptionCompleted ServerEventType = "conversation.item.input_audio_transcription.completed"
+	ServerEventTypeConversationItemInputAudioTranscriptionDelta     ServerEventType = "conversation.item.input_audio_transcription.delta"
 	ServerEventTypeConversationItemInputAudioTranscriptionFailed    ServerEventType = "conversation.item.input_audio_transcription.failed"
-	ServerEventTypeConversationItemTruncated                    ServerEventType = "conversation.item.truncated"
-	ServerEventTypeConversationItemDeleted                      ServerEventType = "conversation.item.deleted"
-	ServerEventTypeResponseCreated                              ServerEventType = "response.created"
-	ServerEventTypeResponseDone                                 ServerEventType = "response.done"
-	ServerEventTypeResponseOutputItemAdded                      ServerEventType = "response.output_item.added"
-	ServerEventTypeResponseOutputItemDone                       ServerEventType = "response.output_item.done"
-	ServerEventTypeResponseContentPartAdded                     ServerEventType = "response.content_part.added"
-	ServerEventTypeResponseContentPartDone                      ServerEventType = "response.content_part.done"
-	ServerEventTypeResponseTextDelta                            ServerEventType = "response.text.delta"
-	ServerEventTypeResponseTextDone                             ServerEventType = "response.text.done"
-	ServerEventTypeResponseAudioDelta                           ServerEventType = "response.audio.delta"
-	ServerEventTypeResponseAudioDone                            ServerEventType = "response.audio.done"
-	ServerEventTypeResponseAudioTranscriptDelta                 ServerEventType = "response.audio_transcript.delta"
-	ServerEventTypeResponseAudioTranscriptDone                  ServerEventType = "response.audio_transcript.done"
-	ServerEventTypeResponseFunctionCallArgumentsDelta           ServerEventType = "response.function_call_arguments.delta"
-	ServerEventTypeResponseFunctionCallArgumentsDone            ServerEventType = "response.function_call_arguments.done"
-	ServerEventTypeRateLimitsUpdated                            ServerEventType = "rate_limits.updated"
+	ServerEventTypeConversationItemTruncated                        ServerEventType = "conversation.item.truncated"
+	ServerEventTypeConversationItemDeleted                          ServerEventType = "conversation.item.deleted"
+	ServerEventTypeResponseCreated                                  ServerEventType = "response.created"
+	ServerEventTypeResponseDone                                     ServerEventType = "response.done"
+	ServerEventTypeResponseOutputItemAdded                          ServerEventType = "response.output_item.added"
+	ServerEventTypeResponseOutputItemDone                           ServerEventType = "response.output_item.done"
+	ServerEventTypeResponseContentPartAdded                         ServerEventType = "response.content_part.added"
+	ServerEventTypeResponseContentPartDone                          ServerEventType = "response.content_part.done"
+	ServerEventTypeResponseTextDelta                                ServerEventType = "response.text.delta"
+	ServerEventTypeResponseTextDone                                 ServerEventType = "response.text.done"
+	ServerEventTypeResponseAudioDelta                               ServerEventType = "response.audio.delta"
+	ServerEventTypeResponseAudioDone                                ServerEventType = "response.audio.done"
+	ServerEventTypeResponseAudioTranscriptDelta                     ServerEventType = "response.audio_transcript.delta"
+	ServerEventTypeResponseAudioTranscriptDone                      ServerEventType = "response.audio_transcript.done"
+	ServerEventTypeResponseFunctionCallArgumentsDelta               ServerEventType = "response.function_call_arguments.delta"
+	ServerEventTypeResponseFunctionCallArgumentsDone                ServerEventType = "response.function_call_arguments.done"
+	ServerEventTypeRateLimitsUpdated                                ServerEventType = "rate_limits.updated"
 
 	// Custom events (extensions to OpenAI Realtime API)
 	ServerEventTypeResponseInterrupted ServerEventType = "response.interrupted" // Response was interrupted by user speech
@@ -219,6 +220,24 @@ func NewConversationItemInputAudioTranscriptionCompletedEvent(itemID string, con
 		ItemID:          itemID,
 		ContentIndex:    contentIndex,
 		Transcript:      transcript,
+	}
+}
+
+// https://platform.openai.com/docs/api-reference/realtime-server-events/conversation/item/input_audio_transcription/delta
+
+type ConversationItemInputAudioTranscriptionDeltaEvent struct {
+	BaseServerEvent
+	ItemID       string `json:"item_id"`
+	ContentIndex int    `json:"content_index"`
+	Delta        string `json:"delta"`
+}
+
+func NewConversationItemInputAudioTranscriptionDeltaEvent(itemID string, contentIndex int, delta string) *ConversationItemInputAudioTranscriptionDeltaEvent {
+	return &ConversationItemInputAudioTranscriptionDeltaEvent{
+		BaseServerEvent: NewBaseServerEvent(ServerEventTypeConversationItemInputAudioTranscriptionDelta),
+		ItemID:          itemID,
+		ContentIndex:    contentIndex,
+		Delta:           delta,
 	}
 }
 
@@ -499,10 +518,10 @@ func NewRateLimitsUpdatedEvent(rateLimits []RateLimit) *RateLimitsUpdatedEvent {
 // This is a custom extension to the OpenAI Realtime API.
 type ResponseInterruptedEvent struct {
 	BaseServerEvent
-	ResponseID  string `json:"response_id"`            // ID of the interrupted response
-	ItemID      string `json:"item_id"`                // ID of the interrupted item
-	AudioMs     int    `json:"audio_ms"`               // Audio position at interrupt (milliseconds)
-	Reason      string `json:"reason"`                 // Reason for interrupt (e.g., "user_speech_detected")
+	ResponseID string `json:"response_id"` // ID of the interrupted response
+	ItemID     string `json:"item_id"`     // ID of the interrupted item
+	AudioMs    int    `json:"audio_ms"`    // Audio position at interrupt (milliseconds)
+	Reason     string `json:"reason"`      // Reason for interrupt (e.g., "user_speech_detected")
 }
 
 func NewResponseInterruptedEvent(responseID, itemID string, audioMs int, reason string) *ResponseInterruptedEvent {

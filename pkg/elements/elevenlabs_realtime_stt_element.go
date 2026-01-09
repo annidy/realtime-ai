@@ -457,10 +457,10 @@ func (e *ElevenLabsRealtimeSTTElement) handleResults(ctx context.Context) {
 			}
 
 			// Determine text type
-			textType := "text/partial"
+			textType := pipeline.TextDataPartialType
 			eventType := pipeline.EventPartialResult
 			if result.IsFinal {
-				textType = "text/final"
+				textType = pipeline.TextDataFinalType
 				eventType = pipeline.EventFinalResult
 			}
 
