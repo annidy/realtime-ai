@@ -13,9 +13,37 @@ import (
 	"github.com/realtime-ai/realtime-ai/pkg/connection"
 	"github.com/realtime-ai/realtime-ai/pkg/elements"
 	"github.com/realtime-ai/realtime-ai/pkg/pipeline"
-	"github.com/realtime-ai/realtime-ai/pkg/realtimeapi"
 	"github.com/realtime-ai/realtime-ai/pkg/server"
 )
+
+type connectionEventHandler struct {
+	connection.ConnectionEventHandler
+
+	conn     connection.Connection
+	pipeline *pipeline.Pipeline
+}
+
+func (c *connectionEventHandler) OnConnectionStateChange(state connection.ConnectionState) {
+	log.Printf("Connection state changed: %v", state)
+
+	if state == connection.ConnectionStateConnected {
+		log.Println("WebRTC connection established")
+	} else if state == connection.ConnectionStateFailed || state == connection.ConnectionStateClosed {
+		log.Println("WebRTC connection ended")
+		if c.pipeline != nil {
+			c.pipeline.Stop()
+		}
+	}
+}
+
+func (c *connectionEventHandler) OnMessage(msg *pipeline.PipelineMessage) {
+	// Push incoming audio to the pipeline
+	c.pipeline.Push(msg)
+}
+
+func (c *connectionEventHandler) OnError(err error) {
+	log.Printf("Connection error: %v", err)
+}
 
 func main() {
 	// Load environment variables
@@ -37,17 +65,40 @@ func main() {
 	}
 
 	// Create WebRTC server configuration
-	cfg := server.DefaultWebRTCRealtimeConfig()
+	cfg := &server.BasicWebRTCConfig{}
 	cfg.RTCUDPPort = 9000
 	cfg.ICELite = false
 
 	// Create WebRTC server
-	rtcServer := server.NewWebRTCRealtimeServer(cfg)
+	rtcServer := server.NewBasicWebRTCServer(cfg)
 
 	// Set up connection handlers
-	// Set pipeline factory
-	rtcServer.SetPipelineFactory(func(ctx context.Context, session *realtimeapi.Session) (*pipeline.Pipeline, error) {
-		return createPipeline(ctx, session)
+	rtcServer.OnConnectionCreated(func(ctx context.Context, conn connection.Connection) {
+		log.Printf("New connection created: %s", conn.PeerID())
+
+		// Create event handler
+		eventHandler := &connectionEventHandler{
+			conn: conn,
+		}
+		conn.RegisterEventHandler(eventHandler)
+
+		// Create and configure pipeline
+		p, _ := createPipeline(ctx)
+		eventHandler.pipeline = p
+
+		// Subscribe to pipeline events for logging
+		subscribeToEvents(conn, p)
+
+		// Start pipeline
+		if err := p.Start(ctx); err != nil {
+			log.Printf("Failed to start pipeline: %v", err)
+			return
+		}
+
+		// Start output handler
+		go handlePipelineOutput(conn, p)
+
+		log.Println("Pipeline started successfully")
 	})
 
 	// Start WebRTC server
@@ -79,8 +130,8 @@ func main() {
 }
 
 // createPipeline sets up the audio processing pipeline with VAD and Deepgram STT
-func createPipeline(ctx context.Context, session *realtimeapi.Session) (*pipeline.Pipeline, error) {
-	p := pipeline.NewPipeline("deepgram-stt-pipeline" + session.ID)
+func createPipeline(ctx context.Context) (*pipeline.Pipeline, error) {
+	p := pipeline.NewPipeline("deepgram-stt-pipeline")
 
 	// 1. Audio Resample Element (ensure 16kHz for VAD and Qwen)
 	// AudioResampleElement(inputRate, outputRate, inputChannels, outputChannels)
@@ -143,15 +194,12 @@ func createPipeline(ctx context.Context, session *realtimeapi.Session) (*pipelin
 		p.Link(resampleElement, deepgramElement)
 	}
 
-	// Subscribe to pipeline events for logging
-	subscribeToEvents(p)
-
 	log.Println("Pipeline configured successfully")
 	return p, nil
 }
 
 // subscribeToEvents subscribes to pipeline events for monitoring
-func subscribeToEvents(p *pipeline.Pipeline) {
+func subscribeToEvents(conn connection.Connection, p *pipeline.Pipeline) {
 	bus := p.Bus()
 	if bus == nil {
 		return
@@ -162,11 +210,6 @@ func subscribeToEvents(p *pipeline.Pipeline) {
 	bus.Subscribe(pipeline.EventVADSpeechStart, vadEventsChan)
 	bus.Subscribe(pipeline.EventVADSpeechEnd, vadEventsChan)
 
-	// Subscribe to STT events
-	sttEventsChan := make(chan pipeline.Event, 10)
-	bus.Subscribe(pipeline.EventPartialResult, sttEventsChan)
-	bus.Subscribe(pipeline.EventFinalResult, sttEventsChan)
-
 	// Handle VAD events
 	go func() {
 		for event := range vadEventsChan {
@@ -175,20 +218,6 @@ func subscribeToEvents(p *pipeline.Pipeline) {
 				log.Println("[VAD] Speech detected - streaming audio...")
 			case pipeline.EventVADSpeechEnd:
 				log.Println("[VAD] Speech ended - committing for final result...")
-			}
-		}
-	}()
-
-	// Handle STT events
-	go func() {
-		for event := range sttEventsChan {
-			if text, ok := event.Payload.(string); ok {
-				switch event.Type {
-				case pipeline.EventPartialResult:
-					log.Printf("[Partial] %s", text)
-				case pipeline.EventFinalResult:
-					log.Printf("[Final] %s", text)
-				}
 			}
 		}
 	}()
@@ -214,25 +243,33 @@ func handlePipelineOutput(conn connection.Connection, p *pipeline.Pipeline) {
 					log.Printf("[Output] Partial transcription: %s", text)
 				}
 			}
-		}
 
-		// Send message back to client (if needed)
-		// For STT-only applications, you might send the text data back
-		// Marshal to JSON
-		jsonData, err := json.Marshal(msg.TextData)
-		if err != nil {
-			log.Printf("Failed to marshal event: %v", err)
-			return
-		}
+			type TTSMessage struct {
+				Type       string `json:"type"`
+				Transcript string `json:"transcript"`
+			}
 
-		// Create a text message with event data
-		jsonmsg := &pipeline.PipelineMessage{
-			Type: pipeline.MsgTypeData,
-			TextData: &pipeline.TextData{
-				Data: jsonData,
-			},
+			// Send message back to client (if needed)
+			// For STT-only applications, you might send the text data back
+			// Marshal to JSON
+			jsonData, err := json.Marshal(TTSMessage{
+				Type:       string(msg.TextData.TextType),
+				Transcript: text,
+			})
+			if err != nil {
+				log.Printf("Failed to marshal event: %v", err)
+				return
+			}
+
+			// Create a text message with event data
+			jsonmsg := &pipeline.PipelineMessage{
+				Type: pipeline.MsgTypeData,
+				TextData: &pipeline.TextData{
+					Data: jsonData,
+				},
+			}
+			conn.SendMessage(jsonmsg)
 		}
-		conn.SendMessage(jsonmsg)
 	}
 
 	log.Println("Output handler stopped")
