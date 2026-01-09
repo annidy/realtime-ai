@@ -35,10 +35,17 @@ require (
 	github.com/cenkalti/backoff/v4 v4.2.1 // indirect
 	github.com/coder/websocket v1.8.14 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/deepgram/deepgram-go-sdk/v3 v3.5.0 // indirect
+	github.com/dvonthenen/websocket v1.5.1-dyv.2 // indirect
+	github.com/fatih/color v1.15.0 // indirect
 	github.com/go-logr/logr v1.4.2 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/go-cmp v0.6.0 // indirect
+	github.com/gorilla/schema v1.3.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.19.0 // indirect
+	github.com/hokaccha/go-prettyjson v0.0.0-20211117102719-0474bc63780f // indirect
+	github.com/mattn/go-colorable v0.1.13 // indirect
+	github.com/mattn/go-isatty v0.0.17 // indirect
 	github.com/pion/datachannel v1.5.10 // indirect
 	github.com/pion/dtls/v3 v3.0.4 // indirect
 	github.com/pion/ice/v4 v4.0.3 // indirect
@@ -71,4 +78,5 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20240903143218-8af14fe29dc1 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240903143218-8af14fe29dc1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
+	k8s.io/klog/v2 v2.110.1 // indirect
 )
