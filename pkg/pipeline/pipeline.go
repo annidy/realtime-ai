@@ -30,9 +30,16 @@ type VideoData struct {
 	Timestamp      time.Time
 }
 
+type TextDataType string
+
+const (
+	TextDataFinalType   TextDataType = "text/final"
+	TextDataPartialType TextDataType = "text/partial"
+)
+
 type TextData struct {
 	Data      []byte
-	TextType  string
+	TextType  TextDataType
 	Timestamp time.Time
 }
 

@@ -25,11 +25,11 @@ type WhisperSTTElement struct {
 	provider asr.Provider
 
 	// ASR configuration
-	language            string
-	model               string
+	language             string
+	model                string
 	enablePartialResults bool
-	prompt              string
-	temperature         float32
+	prompt               string
+	temperature          float32
 
 	// Audio configuration
 	sampleRate    int
@@ -461,10 +461,10 @@ func (e *WhisperSTTElement) handleResults(ctx context.Context) {
 			}
 
 			// Determine text type
-			textType := "text/partial"
+			textType := pipeline.TextDataPartialType
 			eventType := pipeline.EventPartialResult
 			if result.IsFinal {
-				textType = "text/final"
+				textType = pipeline.TextDataFinalType
 				eventType = pipeline.EventFinalResult
 			}
 

@@ -24,7 +24,7 @@ type BasicWebRTCServer struct {
 	api     *webrtc.API
 	handler ServerEventHandler
 
-	onConnectionCreated func(ctx context.Context, conn connection.Connection)
+	onConnectionCreated func(ctx context.Context, conn connection.Connection, r *http.Request)
 	onConnectionError   func(ctx context.Context, conn connection.Connection, err error)
 }
 
@@ -32,7 +32,7 @@ type BasicWebRTCServer struct {
 func NewBasicWebRTCServer(cfg *BasicWebRTCConfig) *BasicWebRTCServer {
 	return &BasicWebRTCServer{
 		config:              cfg,
-		onConnectionCreated: func(ctx context.Context, conn connection.Connection) {},
+		onConnectionCreated: func(ctx context.Context, conn connection.Connection, r *http.Request) {},
 		onConnectionError:   func(ctx context.Context, conn connection.Connection, err error) {},
 		peers:               make(map[string]connection.Connection),
 	}
@@ -47,7 +47,7 @@ func (s *BasicWebRTCServer) RegisterEventHandler(handler ServerEventHandler) {
 	s.handler = handler
 }
 
-func (s *BasicWebRTCServer) OnConnectionCreated(f func(ctx context.Context, conn connection.Connection)) {
+func (s *BasicWebRTCServer) OnConnectionCreated(f func(ctx context.Context, conn connection.Connection, r *http.Request)) {
 	s.onConnectionCreated = f
 }
 
@@ -143,7 +143,7 @@ func (s *BasicWebRTCServer) HandleNegotiate(w http.ResponseWriter, r *http.Reque
 	s.Unlock()
 
 	// Notify handler: connection created
-	s.onConnectionCreated(ctx, webrtcConn)
+	s.onConnectionCreated(ctx, webrtcConn, r)
 
 	// Start negotiation
 	if err := pc.SetRemoteDescription(offer); err != nil {

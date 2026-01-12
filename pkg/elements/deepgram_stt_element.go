@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"reflect"
 	"sync"
 	"time"
 
@@ -13,17 +12,16 @@ import (
 	"github.com/realtime-ai/realtime-ai/pkg/pipeline"
 )
 
-// Ensure ElevenLabsRealtimeSTTElement implements pipeline.Element
-var _ pipeline.Element = (*ElevenLabsRealtimeSTTElement)(nil)
+var (
+	logger                  = log.New(os.Stderr, "[DeepgramSTTElement]: ", log.LstdFlags|log.Lshortfile)
+	_      pipeline.Element = (*DeepgramSTTElement)(nil)
+)
 
-// ElevenLabsRealtimeSTTElement implements speech-to-text using ElevenLabs Scribe V2 Realtime API.
-// It provides true streaming ASR with ~150ms latency via WebSocket.
-// Supports partial and committed transcripts with manual commit for VAD integration.
-type ElevenLabsRealtimeSTTElement struct {
+type DeepgramSTTElement struct {
 	*pipeline.BaseElement
 
 	// ASR provider
-	provider *asr.ElevenLabsProvider
+	provider *asr.DeepgramProvider
 
 	// ASR configuration
 	language             string
@@ -55,16 +53,15 @@ type ElevenLabsRealtimeSTTElement struct {
 	wg     sync.WaitGroup
 }
 
-// ElevenLabsRealtimeSTTConfig holds configuration for ElevenLabsRealtimeSTTElement.
-type ElevenLabsRealtimeSTTConfig struct {
-	// APIKey is the ElevenLabs API key (if empty, will use ELEVENLABS_API_KEY env var)
+type DeepgramSTTConfig struct {
+	// APIKey is the Deepgram API key (if empty, will use DEEPGRAM_API_KEY env var)
 	APIKey string
 
 	// Language code (e.g., "en", "zh", "auto" for auto-detection)
 	// Leave empty for auto-detection
 	Language string
 
-	// Model to use (default: "scribe_v2_realtime")
+	// Model to use (default: "nova-3")
 	Model string
 
 	// EnablePartialResults enables interim results during recognition
@@ -75,58 +72,51 @@ type ElevenLabsRealtimeSTTConfig struct {
 	// When false, audio is sent continuously to recognizer
 	VADEnabled bool
 
-	// SampleRate in Hz (must be 16000 for ElevenLabs)
+	// SampleRate in Hz (must be 16000 for Deepgram)
 	SampleRate int
 
-	// Channels (must be 1 for ElevenLabs - mono only)
+	// Channels (must be 1 for Deepgram - mono only)
 	Channels int
 
 	// BitsPerSample (default: 16)
 	BitsPerSample int
 }
 
-// NewElevenLabsRealtimeSTTElement creates a new ElevenLabs Realtime STT element.
-func NewElevenLabsRealtimeSTTElement(config ElevenLabsRealtimeSTTConfig) (*ElevenLabsRealtimeSTTElement, error) {
+func NewDeepgramSTTElement(config DeepgramSTTConfig) (*DeepgramSTTElement, error) {
 	// Get API key from config or environment
 	apiKey := config.APIKey
 	if apiKey == "" {
-		apiKey = os.Getenv("ELEVENLABS_API_KEY")
+		apiKey = os.Getenv("DEEPGRAM_API_KEY")
 	}
 
 	if apiKey == "" {
-		return nil, fmt.Errorf("ElevenLabs API key is required (set APIKey or ELEVENLABS_API_KEY env var)")
+		return nil, fmt.Errorf("Deepgram API key is required (set APIKey or DEEPGRAM_API_KEY env var)")
 	}
 
-	// Create ElevenLabs provider
-	provider, err := asr.NewElevenLabsProvider(asr.ElevenLabsConfig{
-		APIKey: apiKey,
-		Model:  config.Model,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create ElevenLabs provider: %w", err)
-	}
+	// Create Deepgram provider
+	provider := asr.NewDeepgramProvider(apiKey)
 
 	// Set defaults and validate
 	if config.SampleRate == 0 {
 		config.SampleRate = 16000
 	}
 	if config.SampleRate != 16000 {
-		return nil, fmt.Errorf("ElevenLabs requires 16kHz sample rate, got %d", config.SampleRate)
+		return nil, fmt.Errorf("Deepgram requires 16kHz sample rate, got %d", config.SampleRate)
 	}
 
 	if config.Channels == 0 {
 		config.Channels = 1
 	}
 	if config.Channels != 1 {
-		return nil, fmt.Errorf("ElevenLabs only supports mono audio, got %d channels", config.Channels)
+		return nil, fmt.Errorf("Deepgram only supports mono audio, got %d channels", config.Channels)
 	}
 
 	if config.BitsPerSample == 0 {
 		config.BitsPerSample = 16
 	}
 
-	elem := &ElevenLabsRealtimeSTTElement{
-		BaseElement:          pipeline.NewBaseElement("elevenlabs-realtime-stt", 100),
+	elem := &DeepgramSTTElement{
+		BaseElement:          pipeline.NewBaseElement("deepgram-stt", 100),
 		provider:             provider,
 		language:             config.Language,
 		model:                config.Model,
@@ -138,52 +128,14 @@ func NewElevenLabsRealtimeSTTElement(config ElevenLabsRealtimeSTTConfig) (*Eleve
 		audioBuffer:          make([]byte, 0, 16000*2*10), // 10 seconds buffer
 	}
 
-	// Register properties for runtime configuration
-	elem.registerProperties()
-
 	return elem, nil
 }
 
-// registerProperties sets up the property system for runtime configuration.
-func (e *ElevenLabsRealtimeSTTElement) registerProperties() {
-	e.RegisterProperty(pipeline.PropertyDesc{
-		Name:     "language",
-		Type:     reflect.TypeOf(""),
-		Writable: true,
-		Readable: true,
-		Default:  e.language,
-	})
-
-	e.RegisterProperty(pipeline.PropertyDesc{
-		Name:     "model",
-		Type:     reflect.TypeOf(""),
-		Writable: true,
-		Readable: true,
-		Default:  e.model,
-	})
-
-	e.RegisterProperty(pipeline.PropertyDesc{
-		Name:     "enable_partial_results",
-		Type:     reflect.TypeOf(false),
-		Writable: true,
-		Readable: true,
-		Default:  e.enablePartialResults,
-	})
-
-	e.RegisterProperty(pipeline.PropertyDesc{
-		Name:     "vad_enabled",
-		Type:     reflect.TypeOf(false),
-		Writable: true,
-		Readable: true,
-		Default:  e.vadEnabled,
-	})
-}
-
-// Start starts the ElevenLabs Realtime STT element.
-func (e *ElevenLabsRealtimeSTTElement) Start(ctx context.Context) error {
+// Start starts the Deepgram STT element.
+func (e *DeepgramSTTElement) Start(ctx context.Context) error {
 	e.ctx, e.cancel = context.WithCancel(ctx)
 
-	log.Printf("[ElevenLabsSTT] Starting element (VAD: %v, Language: %s, Model: %s)",
+	logger.Printf("Starting element (VAD: %v, Language: %s, Model: %s)",
 		e.vadEnabled, e.language, e.model)
 
 	// Subscribe to VAD events if VAD is enabled
@@ -192,7 +144,7 @@ func (e *ElevenLabsRealtimeSTTElement) Start(ctx context.Context) error {
 		e.BaseElement.Bus().Subscribe(pipeline.EventVADSpeechStart, e.vadEventsSub)
 		e.BaseElement.Bus().Subscribe(pipeline.EventVADSpeechEnd, e.vadEventsSub)
 
-		log.Printf("[ElevenLabsSTT] Subscribed to VAD events")
+		logger.Printf("Subscribed to VAD events")
 	}
 
 	// Start streaming recognizer
@@ -215,13 +167,13 @@ func (e *ElevenLabsRealtimeSTTElement) Start(ctx context.Context) error {
 	e.wg.Add(1)
 	go e.handleResults(e.ctx)
 
-	log.Printf("[ElevenLabsSTT] Element started successfully")
+	logger.Printf("element started successfully")
 	return nil
 }
 
-// Stop stops the ElevenLabs Realtime STT element.
-func (e *ElevenLabsRealtimeSTTElement) Stop() error {
-	log.Printf("[ElevenLabsSTT] Stopping element")
+// Stop stops the Deepgram STT element.
+func (e *DeepgramSTTElement) Stop() error {
+	logger.Printf("stopping element")
 
 	if e.cancel != nil {
 		e.cancel()
@@ -253,12 +205,12 @@ func (e *ElevenLabsRealtimeSTTElement) Stop() error {
 		e.vadEventsSub = nil
 	}
 
-	log.Printf("[ElevenLabsSTT] Stopped")
+	logger.Printf("element stopped")
 	return nil
 }
 
 // startRecognizer creates and starts a streaming recognizer.
-func (e *ElevenLabsRealtimeSTTElement) startRecognizer(ctx context.Context) error {
+func (e *DeepgramSTTElement) startRecognizer(ctx context.Context) error {
 	e.recognizerLock.Lock()
 	defer e.recognizerLock.Unlock()
 
@@ -281,12 +233,12 @@ func (e *ElevenLabsRealtimeSTTElement) startRecognizer(ctx context.Context) erro
 	}
 
 	e.recognizer = recognizer
-	log.Printf("[ElevenLabsSTT] Streaming recognizer started")
+	logger.Printf("Streaming recognizer started")
 	return nil
 }
 
 // processAudio processes incoming audio messages.
-func (e *ElevenLabsRealtimeSTTElement) processAudio(ctx context.Context) {
+func (e *DeepgramSTTElement) processAudio(ctx context.Context) {
 	defer e.wg.Done()
 
 	for {
@@ -306,7 +258,7 @@ func (e *ElevenLabsRealtimeSTTElement) processAudio(ctx context.Context) {
 
 			// Validate audio format
 			if msg.AudioData.SampleRate != e.sampleRate {
-				log.Printf("[ElevenLabsSTT] Warning: Audio sample rate mismatch (expected %d, got %d)",
+				logger.Printf("Warning: Audio sample rate mismatch (expected %d, got %d)",
 					e.sampleRate, msg.AudioData.SampleRate)
 				continue
 			}
@@ -335,7 +287,7 @@ func (e *ElevenLabsRealtimeSTTElement) processAudio(ctx context.Context) {
 }
 
 // handleVADEvents processes VAD speech start/end events.
-func (e *ElevenLabsRealtimeSTTElement) handleVADEvents(ctx context.Context) {
+func (e *DeepgramSTTElement) handleVADEvents(ctx context.Context) {
 	defer e.wg.Done()
 
 	for {
@@ -354,14 +306,14 @@ func (e *ElevenLabsRealtimeSTTElement) handleVADEvents(ctx context.Context) {
 				if payload, ok := event.Payload.(pipeline.VADPayload); ok {
 					// Send pre-roll audio first (before setting isSpeaking)
 					if len(payload.PreRollAudio) > 0 {
-						log.Printf("[ElevenLabsSTT] VAD speech started with %d bytes pre-roll audio",
+						logger.Printf("VAD speech started with %d bytes pre-roll audio",
 							len(payload.PreRollAudio))
 						e.sendAudioToRecognizer(ctx, payload.PreRollAudio)
 					} else {
-						log.Printf("[ElevenLabsSTT] VAD speech started (no pre-roll)")
+						logger.Printf("VAD speech started (no pre-roll)")
 					}
 				} else {
-					log.Printf("[ElevenLabsSTT] VAD speech started (legacy payload)")
+					logger.Printf("VAD speech started (legacy payload)")
 				}
 
 				e.speakingMutex.Lock()
@@ -374,7 +326,7 @@ func (e *ElevenLabsRealtimeSTTElement) handleVADEvents(ctx context.Context) {
 				e.audioBufferLock.Unlock()
 
 			case pipeline.EventVADSpeechEnd:
-				log.Printf("[ElevenLabsSTT] VAD speech ended")
+				logger.Printf("VAD speech ended")
 				e.speakingMutex.Lock()
 				e.isSpeaking = false
 				e.speakingMutex.Unlock()
@@ -387,22 +339,23 @@ func (e *ElevenLabsRealtimeSTTElement) handleVADEvents(ctx context.Context) {
 }
 
 // sendAudioToRecognizer sends audio data to the streaming recognizer.
-func (e *ElevenLabsRealtimeSTTElement) sendAudioToRecognizer(ctx context.Context, audioData []byte) {
+func (e *DeepgramSTTElement) sendAudioToRecognizer(ctx context.Context, audioData []byte) {
 	e.recognizerLock.Lock()
 	recognizer := e.recognizer
 	e.recognizerLock.Unlock()
 
 	if recognizer == nil {
+		logger.Printf("No recognizer available")
 		return
 	}
 
 	if err := recognizer.SendAudio(ctx, audioData); err != nil {
-		log.Printf("[ElevenLabsSTT] Error sending audio to recognizer: %v", err)
+		logger.Printf("Error sending audio to recognizer: %v", err)
 	}
 }
 
 // commitRecognizer commits the audio buffer to trigger final transcription.
-func (e *ElevenLabsRealtimeSTTElement) commitRecognizer(ctx context.Context) {
+func (e *DeepgramSTTElement) commitRecognizer(ctx context.Context) {
 	e.recognizerLock.Lock()
 	recognizer := e.recognizer
 	e.recognizerLock.Unlock()
@@ -410,19 +363,11 @@ func (e *ElevenLabsRealtimeSTTElement) commitRecognizer(ctx context.Context) {
 	if recognizer == nil {
 		return
 	}
-
-	// Check if recognizer supports Commit method (ElevenLabs specific)
-	if er, ok := asr.IsElevenLabsRecognizer(recognizer); ok {
-		if err := er.Commit(ctx); err != nil {
-			log.Printf("[ElevenLabsSTT] Error committing audio: %v", err)
-		} else {
-			log.Printf("[ElevenLabsSTT] Committed audio for final transcription")
-		}
-	}
+	// TODO: recognizer.Commit() not implemented
 }
 
 // handleResults processes recognition results from the streaming recognizer.
-func (e *ElevenLabsRealtimeSTTElement) handleResults(ctx context.Context) {
+func (e *DeepgramSTTElement) handleResults(ctx context.Context) {
 	defer e.wg.Done()
 
 	e.recognizerLock.Lock()
@@ -430,7 +375,7 @@ func (e *ElevenLabsRealtimeSTTElement) handleResults(ctx context.Context) {
 	e.recognizerLock.Unlock()
 
 	if recognizer == nil {
-		log.Printf("[ElevenLabsSTT] No recognizer available for results")
+		logger.Printf("No recognizer available for results")
 		return
 	}
 
@@ -443,7 +388,7 @@ func (e *ElevenLabsRealtimeSTTElement) handleResults(ctx context.Context) {
 
 		case result, ok := <-resultsChan:
 			if !ok {
-				log.Printf("[ElevenLabsSTT] Results channel closed")
+				logger.Printf("Results channel closed")
 				return
 			}
 
@@ -458,13 +403,11 @@ func (e *ElevenLabsRealtimeSTTElement) handleResults(ctx context.Context) {
 
 			// Determine text type
 			textType := pipeline.TextDataPartialType
-			eventType := pipeline.EventPartialResult
 			if result.IsFinal {
 				textType = pipeline.TextDataFinalType
-				eventType = pipeline.EventFinalResult
 			}
 
-			log.Printf("[ElevenLabsSTT] Recognition result (%s): %s", textType, result.Text)
+			logger.Printf("Recognition result (%s): %s", textType, result.Text)
 
 			// Create text data message
 			textMsg := &pipeline.PipelineMessage{
@@ -485,69 +428,23 @@ func (e *ElevenLabsRealtimeSTTElement) handleResults(ctx context.Context) {
 			}
 
 			// Publish event to bus
-			if e.BaseElement.Bus() != nil {
-				e.BaseElement.Bus().Publish(pipeline.Event{
-					Type:      eventType,
+			if result.IsFinal {
+				e.Bus().Publish(pipeline.Event{
+					Type:      pipeline.EventPartialResult,
 					Timestamp: result.Timestamp,
-					Payload:   result.Text,
+					Payload: pipeline.FinalResultPayload{
+						Transcript: result.Text,
+					},
+				})
+			} else {
+				e.Bus().Publish(pipeline.Event{
+					Type:      pipeline.EventFinalResult,
+					Timestamp: result.Timestamp,
+					Payload: pipeline.PartialResultPayload{
+						Delta: result.Text,
+					},
 				})
 			}
 		}
 	}
-}
-
-// SetProperty sets a property value at runtime.
-func (e *ElevenLabsRealtimeSTTElement) SetProperty(name string, value interface{}) error {
-	switch name {
-	case "language":
-		if lang, ok := value.(string); ok {
-			e.language = lang
-			log.Printf("[ElevenLabsSTT] Language set to: %s", lang)
-			return nil
-		}
-	case "model":
-		if model, ok := value.(string); ok {
-			e.model = model
-			log.Printf("[ElevenLabsSTT] Model set to: %s", model)
-			return nil
-		}
-	case "enable_partial_results":
-		if enable, ok := value.(bool); ok {
-			e.enablePartialResults = enable
-			log.Printf("[ElevenLabsSTT] Partial results: %v", enable)
-			return nil
-		}
-	case "vad_enabled":
-		if enable, ok := value.(bool); ok {
-			e.vadEnabled = enable
-			log.Printf("[ElevenLabsSTT] VAD enabled: %v", enable)
-			return nil
-		}
-	}
-
-	return e.BaseElement.SetProperty(name, value)
-}
-
-// GetProperty gets a property value.
-func (e *ElevenLabsRealtimeSTTElement) GetProperty(name string) (interface{}, error) {
-	switch name {
-	case "language":
-		return e.language, nil
-	case "model":
-		return e.model, nil
-	case "enable_partial_results":
-		return e.enablePartialResults, nil
-	case "vad_enabled":
-		return e.vadEnabled, nil
-	}
-
-	return e.BaseElement.GetProperty(name)
-}
-
-// Commit commits the current audio buffer to trigger final transcription.
-// This is useful in non-VAD mode when you want to manually control when
-// final transcriptions are generated.
-func (e *ElevenLabsRealtimeSTTElement) Commit(ctx context.Context) error {
-	e.commitRecognizer(ctx)
-	return nil
 }

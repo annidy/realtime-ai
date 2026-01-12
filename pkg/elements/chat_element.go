@@ -40,12 +40,12 @@ var _ pipeline.Element = (*ChatElement)(nil)
 
 // ChatConfig holds configuration for the chat element
 type ChatConfig struct {
-	APIKey       string // OpenAI API key
-	Model        string // Model name (e.g., "gpt-4o-mini", "gpt-4o")
-	SystemPrompt string // System prompt for the assistant
-	MaxTokens    int    // Maximum tokens in response (0 = default)
-	Streaming    bool   // Enable streaming responses
-	MaxHistory   int    // Maximum number of history messages to retain (0 = unlimited)
+	APIKey       string  // OpenAI API key
+	Model        string  // Model name (e.g., "gpt-4o-mini", "gpt-4o")
+	SystemPrompt string  // System prompt for the assistant
+	MaxTokens    int     // Maximum tokens in response (0 = default)
+	Streaming    bool    // Enable streaming responses
+	MaxHistory   int     // Maximum number of history messages to retain (0 = unlimited)
 	Temperature  float64 // Temperature for response generation (0.0-2.0)
 }
 
@@ -350,9 +350,9 @@ func (e *ChatElement) sendToTTS(text string, sessionID string, isFinal bool) {
 		return
 	}
 
-	textType := "partial"
+	textType := pipeline.TextDataPartialType
 	if isFinal {
-		textType = "final"
+		textType = pipeline.TextDataFinalType
 	}
 
 	msg := &pipeline.PipelineMessage{
