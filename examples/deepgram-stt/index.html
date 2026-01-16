@@ -173,7 +173,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>Deepgram STT</h1>
+        <h1>Deepgram/Elevenlabs STT</h1>
         <p class="subtitle">Streaming ASR with WebRTC</p>
 
         <div class="card">
@@ -189,6 +189,13 @@
             </div>
             
             <div class="info-grid">
+                <div class="info-item">
+                    <span class="info-label">Provider</span>
+                    <div>
+                        <select id="providerSelect" class="select-field" aria-label="Provider select">
+                        </select>
+                    </div>
+                </div>
                 <div class="info-item">
                     <span class="info-label">Model</span>
                     <div>
@@ -235,20 +242,37 @@
         const historyEl = document.getElementById('history');
         const currentEl = document.getElementById('current');
         const latencyEl = document.getElementById('latencyValue');
+        const providerSelect = document.getElementById('providerSelect');
         const modelSelect = document.getElementById('modelSelect');
         const langSelect = document.getElementById('langSelect');
 
-        // model -> languages mapping
-        const modelLangMap = {
-            // 'flux-general-en': ['en'],
-            'nova-3': ['multi: English, Spanish, French, German, Hindi, Russian, Portuguese, Japanese, Italian, and Dutch', 'en'],
-            'nova-2': ['multi: Spanish + English', 'en', 'zh']
+        // provider -> model -> languages mapping
+        const selectLangMap = {
+                "deepgram": {
+                    // 'flux-general-en': ['en'],
+                    'nova-3': ['multi: English, Spanish, French, German, Hindi, Russian, Portuguese, Japanese, Italian, and Dutch', 'en'],
+                    'nova-2': ['multi: Spanish + English', 'en', 'zh']
+                }, 
+                "elevenlabs": {
+                    "scribe_v2_realtime": ["auto", "en", "zh"]
+                }
         };
 
-        function populateModels() {
+        function populateProviders() {
+            // clear
+            providerSelect.innerHTML = '';
+            Object.keys(selectLangMap).forEach((m) => {
+                const opt = document.createElement('option');
+                opt.value = m;
+                opt.textContent = m;
+                providerSelect.appendChild(opt);
+            });
+        }
+
+        function populateModels(provider) {
             // clear
             modelSelect.innerHTML = '';
-            Object.keys(modelLangMap).forEach((m) => {
+            Object.keys(selectLangMap[provider]).forEach((m) => {
                 const opt = document.createElement('option');
                 opt.value = m;
                 opt.textContent = m;
@@ -256,8 +280,8 @@
             });
         }
 
-        function populateLanguagesForModel(model) {
-            const langs = modelLangMap[model] || [];
+        function populateLanguagesForModel(provider, model) {
+            const langs = selectLangMap[provider][model] || [];
             langSelect.innerHTML = '';
             langs.forEach((l) => {
                 const opt = document.createElement('option');
@@ -273,18 +297,20 @@
 
         // initialize selects
         (function initModelLanguageSelectors() {
-            populateModels();
-            // default model per user's preference
-            const defaultModel = 'flux-general-en';
-            if (Array.from(modelSelect.options).some(o => o.value === defaultModel)) {
-                modelSelect.value = defaultModel;
-            } else if (modelSelect.options.length > 0) {
-                modelSelect.selectedIndex = 0;
-            }
-            populateLanguagesForModel(modelSelect.value);
-            modelSelect.addEventListener('change', (e) => {
-                populateLanguagesForModel(e.target.value);
+            populateProviders()
+
+            populateModels(providerSelect.value);
+            providerSelect.addEventListener('change', (e) => {
+                populateModels(e.target.value);
+                populateLanguagesForModel(e.target.value, modelSelect.value)
             });
+            providerSelect.selectedIndex = 0;
+
+            populateLanguagesForModel(providerSelect.value, modelSelect.value);
+            modelSelect.addEventListener('change', (e) => {
+                populateLanguagesForModel(providerSelect.value, e.target.value);
+            });
+            modelSelect.selectedIndex = 0;
         })();
 
         function updateStatus(status, text) {
@@ -356,6 +382,7 @@
 
                 // Negotiate with server — include selected model and language as URL params
                 const params = new URLSearchParams({
+                    provider: providerSelect ? providerSelect.value : '',
                     model: modelSelect ? modelSelect.value : '',
                     lang: langSelect ? langSelect.value.split(':')[0].trim() : '',
                 });

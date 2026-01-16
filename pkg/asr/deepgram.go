@@ -179,7 +179,7 @@ func (dch *deepgramStreamingRecognizer) Run() error {
 	wgReceivers.Add(1)
 	go func() {
 		defer wgReceivers.Done()
-
+		var tmpSentence strings.Builder
 		for mr := range dch.messageChan {
 			sentence := strings.TrimSpace(mr.Channel.Alternatives[0].Transcript)
 
@@ -195,11 +195,17 @@ func (dch *deepgramStreamingRecognizer) Run() error {
 			}
 
 			result := &RecognitionResult{
-				Text:       sentence,
-				IsFinal:    mr.IsFinal,
+				Text:       tmpSentence.String() + sentence,
+				IsFinal:    mr.IsFinal && mr.SpeechFinal,
 				Confidence: float32(mr.Channel.Alternatives[0].Confidence),
 				Timestamp:  time.Now(),
 				Metadata:   map[string]interface{}{},
+			}
+			if mr.SpeechFinal {
+				tmpSentence.Reset()
+			} else if mr.IsFinal {
+				tmpSentence.WriteString(sentence)
+				logger.Print("\n\n ************* \n\n")
 			}
 
 			select {
@@ -303,8 +309,8 @@ func (r *deepgramStreamingRecognizer) connect(ctx context.Context) error {
 		Encoding:    "linear16",
 		Channels:    1,
 		SampleRate:  r.audioConfig.SampleRate, // 16000,
-		SmartFormat: true,
-		VadEvents:   true,
+		SmartFormat: true,                     // additional formatting will be applied to transcripts to improve readability
+		VadEvents:   false,                    // no use VAD events
 		// To get UtteranceEnd, the following must be set:
 		InterimResults: true,
 		UtteranceEndMs: "1000",

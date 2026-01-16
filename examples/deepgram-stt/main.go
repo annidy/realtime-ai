@@ -139,6 +139,10 @@ func createPipeline(ctx context.Context, r *http.Request) (*pipeline.Pipeline, e
 	if model == "" {
 		model = "nova-3"
 	}
+	provider := r.URL.Query().Get("provider")
+	if provider == "" {
+		provider = "deepgram"
+	}
 	lang := r.URL.Query().Get("lang")
 	if lang == "" {
 		lang = "en"
@@ -175,34 +179,52 @@ func createPipeline(ctx context.Context, r *http.Request) (*pipeline.Pipeline, e
 		}
 	}
 
-	// 3. Deegram STT Element
-	deepgramConfig := elements.DeepgramSTTConfig{
-		APIKey:               os.Getenv("DEEPGROM_API_KEY"),
-		Language:             lang,
-		Model:                model,
-		EnablePartialResults: true,  // Enable real-time partial results
-		VADEnabled:           false, // Enable VAD integration if VAD is available
-		SampleRate:           16000,
-		Channels:             1,
-		BitsPerSample:        16,
-	}
+	log.Printf("Added: %s (Language: %s, Model: %v)", provider, lang, model)
 
-	deepgramElement, err := elements.NewDeepgramSTTElement(deepgramConfig)
-	if err != nil {
-		log.Fatalf("Failed to create Deegram STT element: %v", err)
+	var sttElement pipeline.Element
+	if provider == "deepgram" {
+		// 3. Deegram STT Element
+		deepgramConfig := elements.DeepgramSTTConfig{
+			APIKey:               os.Getenv("DEEPGROM_API_KEY"),
+			Language:             lang,
+			Model:                model,
+			EnablePartialResults: true,  // Enable real-time partial results
+			VADEnabled:           false, // Enable VAD integration if VAD is available
+			SampleRate:           16000,
+			Channels:             1,
+			BitsPerSample:        16,
+		}
+
+		sttElement, err = elements.NewDeepgramSTTElement(deepgramConfig)
+		if err != nil {
+			log.Fatalf("Failed to create Deegram STT element: %v", err)
+		}
+	} else if provider == "elevenlabs" {
+		// 3. ElevenLabs ASR
+		asrConfig := elements.ElevenLabsRealtimeSTTConfig{
+			APIKey:               os.Getenv("ELEVENLABS_API_KEY"),
+			Language:             lang, // Auto-detect works well too
+			Model:                model,
+			EnablePartialResults: false, // Only final results to reduce LLM calls
+			VADEnabled:           false, // Use VAD events for commit
+			SampleRate:           16000,
+			Channels:             1,
+		}
+		sttElement, err = elements.NewElevenLabsRealtimeSTTElement(asrConfig)
+		if err != nil {
+			return nil, err
+		}
 	}
-	p.AddElement(deepgramElement)
-	log.Printf("Added: DeepgramSTTElement (Language: %s, VAD: %v, Partial: %v)",
-		deepgramConfig.Language, deepgramConfig.VADEnabled, deepgramConfig.EnablePartialResults)
+	p.AddElement(sttElement)
 
 	// Link elements together
 	if vadElement != nil {
 		// Pipeline: resample -> VAD -> Deegram STT
 		p.Link(resampleElement, vadElement)
-		p.Link(vadElement, deepgramElement)
+		p.Link(vadElement, sttElement)
 	} else {
 		// Pipeline: resample -> Deegram STT
-		p.Link(resampleElement, deepgramElement)
+		p.Link(resampleElement, sttElement)
 	}
 
 	log.Println("Pipeline configured successfully")

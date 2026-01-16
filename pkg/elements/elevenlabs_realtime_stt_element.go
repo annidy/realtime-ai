@@ -97,10 +97,16 @@ func NewElevenLabsRealtimeSTTElement(config ElevenLabsRealtimeSTTConfig) (*Eleve
 		return nil, fmt.Errorf("ElevenLabs API key is required (set APIKey or ELEVENLABS_API_KEY env var)")
 	}
 
+	commitStrategy := "vad"
+	if config.VADEnabled {
+		commitStrategy = "manual"
+	}
+
 	// Create ElevenLabs provider
 	provider, err := asr.NewElevenLabsProvider(asr.ElevenLabsConfig{
-		APIKey: apiKey,
-		Model:  config.Model,
+		APIKey:         apiKey,
+		Model:          config.Model,
+		CommitStrategy: commitStrategy,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create ElevenLabs provider: %w", err)

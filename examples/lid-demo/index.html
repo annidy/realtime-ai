@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC Speech Recognition</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background-color: #e9eff1;
+            font-family: sans-serif;
+            color: #333;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+
+        .container {
+            background: #fff;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            width: 600px;
+            padding: 40px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+
+        h1 {
+            font-size: 28px;
+            color: #333;
+            margin-bottom: 20px;
+        }
+
+        .button-container {
+            display: flex;
+            width: 100%;
+            justify-content: space-between;
+            gap: 10px;
+            margin-bottom: 30px;
+        }
+
+        button {
+            width: 48%;
+            padding: 15px;
+            font-size: 18px;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border: none;
+            outline: none;
+        }
+
+        button:hover {
+            transform: translateY(-3px);
+        }
+
+        button:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+
+        .connect {
+            background-color: #4CAF50;
+            color: white;
+        }
+
+        .disconnect {
+            background-color: #FF5733;
+            color: white;
+        }
+
+        .status {
+            font-size: 18px;
+            font-weight: 500;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .status span {
+            margin-left: 15px;
+        }
+
+        .statusIndicator {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #666;
+        }
+        .status-dot.connected {
+            background: #4ecdc4;
+            box-shadow: 0 0 10px #4ecdc4;
+        }
+        .status-dot.connecting {
+            background: #ffd93d;
+            animation: pulse 1s infinite;
+        }
+        .status-dot.error {
+            background: #ff6b6b;
+        }
+
+        .speechOutput {
+            margin-top: 20px;
+            font-size: 20px;
+            font-weight: 500;
+            color: #444;
+            transition: color 0.3s ease;
+        }
+
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>WebRTC Speech Recognition</h1>
+    <div class="button-container">
+        <button id="connectButton" class="connect" onclick="connect()">Connect</button>
+        <button id="disconnectButton" class="disconnect" onclick="disconnect()" disabled>Disconnect</button>
+    </div>
+
+    <div class="status" id="status">
+        <div id="statusIndicator" class="status-dot"></div>
+        <span id="connectionStatus">disconnected</span>
+    </div>
+
+    <div class="speechOutput" id="speechOutput">Speech is Chinese (0%)</div>
+</div>
+
+<script>
+    let pc = null;
+    let dc = null;
+    let localStream = null;
+
+    // Buttons
+    const connectButton = document.getElementById('connectButton');
+    const disconnectButton = document.getElementById('disconnectButton');
+    const statusIndicator = document.getElementById('statusIndicator');
+    const connectionStatus = document.getElementById('connectionStatus');
+    const speechOutput = document.getElementById('speechOutput');
+
+    // Set up WebRTC connection
+    async function connect() {
+        connectButton.disabled = true;
+        disconnectButton.disabled = false;
+
+        localStream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true
+                }
+            });
+        
+        pc = new RTCPeerConnection();
+
+        updateConnectionStatus('connecting', 'Connecting...')
+
+        dc = pc.createDataChannel("speechDataChannel");
+        dc.onmessage = (event) => {
+            let data = event.data;
+            if (data instanceof ArrayBuffer) {
+                data = new TextDecoder().decode(data);
+            }
+            try {
+                console.log("Received message: " + data);
+                const msg = JSON.parse(data);
+                if (msg.duration < 1) {
+                    console.log("Received message with duration < 1");
+                    return;
+                }
+                updateSpeechOutput(msg.lang, msg.prob)
+            } catch (e) {
+                console.log("Error parsing message: " + e);
+            }
+        };
+
+        const audioTrack = localStream.getAudioTracks()[0];
+        pc.addTrack(audioTrack, localStream);
+
+        pc.onconnectionstatechange = () => {
+            console.log("Connection state: " + pc.connectionState);
+            updateConnectionStatus(pc.connectionState, pc.connectionState);
+        }
+
+        const offer = await pc.createOffer()
+        await pc.setLocalDescription(offer)
+
+        // Wait for ICE gathering
+        await new Promise((resolve) => {
+            if (pc.iceGatheringState === 'complete') {
+                resolve();
+            } else {
+                pc.onicegatheringstatechange = () => {
+                    if (pc.iceGatheringState === 'complete') {
+                        resolve();
+                    }
+                };
+            }
+        });
+
+        // Send offer to server
+        const response = await fetch('/session', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(pc.localDescription)
+        });
+
+        if (!response.ok) {
+            throw new Error('Server returned ' + response.status);
+        }
+
+        const answer = await response.json();
+
+        // Set remote description
+        await pc.setRemoteDescription(answer);
+    }
+
+    // Disconnect WebRTC
+    function disconnect() {
+        if (localStream) {
+            localStream.getTracks().forEach(track => track.stop());
+            localStream = null;
+        }
+        if (pc) {
+            pc.close();
+            pc = null;
+        }
+
+        updateConnectionStatus('', 'disconnected');
+        connectButton.disabled = false;
+        disconnectButton.disabled = true;
+    }
+
+    // Update UI with connection status
+    function updateConnectionStatus(status, message) {
+        statusIndicator.className = 'status-dot ' + status;
+        connectionStatus.textContent = message;
+    }
+
+    // Update speech output
+    function updateSpeechOutput(language, probability) {
+        const probabilityPercentage = (probability).toFixed(2);
+        if (language.toLowerCase() === "chinese") {
+            speechOutput.textContent = `Speech is chinese (${probabilityPercentage}%)`;
+            if (probability > 90) {
+                speechOutput.style.color = "#4CAF50"; // Green color for Chinese
+            } else {
+                speechOutput.style.color = "#778899";
+            }
+        } else {
+            speechOutput.textContent = `Speech is not chinese (${probabilityPercentage}%)`;
+            speechOutput.style.color = "#FF5733"; // Red color for other languages
+        }
+    }
+
+</script>
+
+</body>
+</html>

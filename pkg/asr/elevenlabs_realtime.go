@@ -33,7 +33,8 @@ const (
 	elevenlabsRealtimeWSURL = "wss://api.elevenlabs.io/v1/speech-to-text/realtime"
 
 	// Default model
-	elevenlabsDefaultModel = "scribe_v2_realtime"
+	elevenlabsDefaultModel          = "scribe_v2_realtime"
+	elevenlabsDefaultCommitStrategy = "manual"
 
 	// Required sample rate (ElevenLabs only supports 16kHz)
 	elevenlabsRequiredSampleRate = 16000
@@ -48,9 +49,11 @@ const (
 // ElevenLabsProvider implements the Provider interface using ElevenLabs Scribe V2 Realtime API.
 // It uses WebSocket for true streaming speech recognition.
 type ElevenLabsProvider struct {
-	apiKey string
-	model  string
-	mu     sync.RWMutex
+	apiKey            string
+	model             string
+	commitStrategy    string
+	languageDetection bool
+	mu                sync.RWMutex
 }
 
 // ElevenLabsConfig holds configuration for ElevenLabsProvider.
@@ -60,6 +63,9 @@ type ElevenLabsConfig struct {
 
 	// Model to use (default: "scribe_v2_realtime")
 	Model string
+
+	// default manual
+	CommitStrategy string // manual, vad
 }
 
 // NewElevenLabsProvider creates a new ElevenLabs Realtime ASR provider.
@@ -75,10 +81,16 @@ func NewElevenLabsProvider(config ElevenLabsConfig) (*ElevenLabsProvider, error)
 	if model == "" {
 		model = elevenlabsDefaultModel
 	}
+	commitStrategy := config.CommitStrategy
+	if commitStrategy == "" {
+		commitStrategy = elevenlabsDefaultCommitStrategy
+	}
 
 	return &ElevenLabsProvider{
-		apiKey: config.APIKey,
-		model:  model,
+		apiKey:            config.APIKey,
+		model:             model,
+		commitStrategy:    commitStrategy,
+		languageDetection: true,
 	}, nil
 }
 
@@ -208,8 +220,7 @@ func (p *ElevenLabsProvider) SupportsStreaming() bool {
 func (p *ElevenLabsProvider) SupportedLanguages() []string {
 	// ElevenLabs Scribe supports many languages
 	return []string{
-		"en", "zh", "es", "fr", "de", "it", "pt", "ru", "ja", "ko",
-		"ar", "hi", "nl", "pl", "tr", "vi", "th", "id", "auto",
+		"en", "zh", "es", "fr", "de", "it", "pt", "ru", "ja", "ko", "auto",
 	}
 }
 
@@ -237,24 +248,26 @@ type elevenlabsStreamingRecognizer struct {
 	sessionReady atomic.Bool
 	startTime    time.Time
 	sentenceID   string
+	audioBuffer  []byte
 }
 
 // ElevenLabs message types
 type elevenlabsMessage struct {
-	MessageType string `json:"message_type"`
-	Text        string `json:"text,omitempty"`
-	StartTime   *int   `json:"start_time,omitempty"`
-	EndTime     *int   `json:"end_time,omitempty"`
-	Confidence  *float32 `json:"confidence,omitempty"`
-	Words       []elevenlabsWord `json:"words,omitempty"`
-	Error       *elevenlabsError `json:"error,omitempty"`
+	MessageType  string           `json:"message_type"`
+	Text         string           `json:"text,omitempty"`
+	StartTime    *int             `json:"start_time,omitempty"`
+	EndTime      *int             `json:"end_time,omitempty"`
+	Confidence   *float32         `json:"confidence,omitempty"`
+	Words        []elevenlabsWord `json:"words,omitempty"`
+	Error        *elevenlabsError `json:"error,omitempty"`
+	LanguageCode string           `json:"language_code,omitempty"`
 }
 
 type elevenlabsWord struct {
-	Text       string  `json:"text"`
-	StartTime  int     `json:"start_time"`
-	EndTime    int     `json:"end_time"`
-	Confidence float32 `json:"confidence"`
+	Text    string  `json:"text"`
+	Start   float64 `json:"start"`
+	End     float64 `json:"end"`
+	Logprob float32 `json:"logprob"`
 }
 
 type elevenlabsError struct {
@@ -313,7 +326,12 @@ func (r *elevenlabsStreamingRecognizer) doConnect() error {
 	// Build WebSocket URL with query parameters
 	params := url.Values{}
 	params.Set("model_id", r.provider.model)
-	params.Set("commit_strategy", "manual")
+	params.Set("commit_strategy", r.provider.commitStrategy)
+	if r.provider.languageDetection {
+		params.Set("include_language_detection", "true")
+	}
+	params.Set("vad_silence_threshold_secs", "0.3")
+	params.Set("vad_threshold", "0.4")
 
 	// Add language_code if specified
 	if r.config.Language != "" && r.config.Language != "auto" {
@@ -407,16 +425,19 @@ func (r *elevenlabsStreamingRecognizer) writeLoop() {
 				log.Printf("[ElevenLabs] Session not ready, queuing audio")
 				continue
 			}
-
-			r.sendAudioChunk(audioData, false)
+			r.audioBuffer = append(r.audioBuffer, audioData...)
+			if len(r.audioBuffer) >= 8192 {
+				r.sendAudioChunk(r.audioBuffer, false)
+				r.audioBuffer = r.audioBuffer[:0]
+			}
 
 		case <-r.commitChan:
 			if !r.sessionReady.Load() {
 				continue
 			}
-
 			// Send empty audio with commit=true
-			r.sendAudioChunk([]byte{}, true)
+			r.sendAudioChunk(r.audioBuffer, true)
+			r.audioBuffer = r.audioBuffer[:0]
 			log.Printf("[ElevenLabs] Sent commit")
 		}
 	}
@@ -448,6 +469,8 @@ func (r *elevenlabsStreamingRecognizer) sendAudioChunk(audioData []byte, commit 
 
 // handleMessage processes incoming WebSocket messages.
 func (r *elevenlabsStreamingRecognizer) handleMessage(data []byte) {
+	log.Printf("[ElevenLabs] handleMessage: %s", string(data))
+
 	var msg elevenlabsMessage
 	if err := json.Unmarshal(data, &msg); err != nil {
 		log.Printf("[ElevenLabs] Failed to parse message: %v", err)
@@ -490,6 +513,22 @@ func (r *elevenlabsStreamingRecognizer) handleMessage(data []byte) {
 		}
 
 	case "committed_transcript", "committed_transcript_with_timestamps":
+		if r.provider.languageDetection {
+			if msg.MessageType == "committed_transcript" {
+				return
+			}
+			var foundLaunge bool
+			for _, lang := range r.provider.SupportedLanguages() {
+				if msg.LanguageCode == lang {
+					foundLaunge = true
+					break
+				}
+			}
+			if !foundLaunge {
+				log.Printf("[ElevenLabs] Unsupported language: %s", msg.LanguageCode)
+				return
+			}
+		}
 		if msg.Text != "" {
 			confidence := float32(0.95)
 			if msg.Confidence != nil {
